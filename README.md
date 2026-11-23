@@ -11,7 +11,9 @@ OpenAI-compatible FastAPI proxy for `https://100milionseek.top/v1` with streamin
 ## Client keys
 
 - `sasukepremium`: unlimited requests
-- `sasuke`: 100 requests per UTC day, then `429 Daily limit crossed`
+- `sasuke`: 100 requests per UTC day per client IP, then `429 Daily limit crossed`
+
+Every response includes the watermark `developer: sasuke` in `X-Sasuke-Watermark` and `X-Developer` headers. Streaming responses also emit it as an SSE comment before the first chunk, so normal OpenAI clients continue to work unchanged.
 
 The standard-tier counter is in memory and resets if the process restarts. For multi-instance production use, replace it with Redis or a database.
 

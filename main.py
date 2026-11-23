@@ -4,7 +4,7 @@ import threading
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from openai import OpenAI
 
@@ -23,8 +23,9 @@ PREMIUM_KEY = os.getenv("SASUKE_PREMIUM_KEY", "sasukepremium")
 STANDARD_KEY = os.getenv("SASUKE_STANDARD_KEY", "sasuke")
 STANDARD_DAILY_LIMIT = int(os.getenv("SASUKE_DAILY_LIMIT", "100"))
 
-_usage: dict[tuple[str, str], int] = {}
+_usage: dict[tuple[str, str, str], int] = {}
 _usage_lock = threading.Lock()
+WATERMARK = "developer: sasuke"
 
 
 def get_client() -> OpenAI:
@@ -46,12 +47,19 @@ def authenticate(api_key_header: str | None) -> str:
     raise HTTPException(status_code=401, detail="Invalid client API key")
 
 
-def consume_quota(tier: str) -> None:
+def client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",", 1)[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def consume_quota(tier: str, ip: str) -> int | None:
     if tier == "premium":
-        return
+        return None
 
     day = datetime.now(timezone.utc).date().isoformat()
-    usage_key = (day, tier)
+    usage_key = (day, tier, ip)
     with _usage_lock:
         used = _usage.get(usage_key, 0)
         if used >= STANDARD_DAILY_LIMIT:
@@ -60,10 +68,12 @@ def consume_quota(tier: str) -> None:
                 detail=f"Daily limit crossed ({STANDARD_DAILY_LIMIT} requests). Try again tomorrow or use the premium key.",
             )
         _usage[usage_key] = used + 1
+        return STANDARD_DAILY_LIMIT - used - 1
 
 
 def sse_stream(request_body: dict[str, Any]):
     try:
+        yield f": {WATERMARK}\n\n"
         stream = get_client().chat.completions.create(
             **request_body,
             model=request_body.get("model") or UPSTREAM_MODEL,
@@ -87,16 +97,29 @@ def sse_stream(request_body: dict[str, Any]):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "sasuke-api-wrapper"}
+    return JSONResponse(
+        {"status": "ok", "service": "sasuke-api-wrapper"},
+        headers={"X-Sasuke-Watermark": WATERMARK, "X-Developer": "sasuke"},
+    )
 
 
 @app.post("/v1/chat/completions")
 def chat_completions(
     body: dict[str, Any],
+    request: Request,
     authorization: str | None = Header(default=None),
 ):
     tier = authenticate(authorization)
-    consume_quota(tier)
+    remaining = consume_quota(tier, client_ip(request))
+    response_headers = {
+        "X-Sasuke-Watermark": WATERMARK,
+        "X-Developer": "sasuke",
+    }
+    if remaining is not None:
+        response_headers.update({
+            "X-RateLimit-Limit": str(STANDARD_DAILY_LIMIT),
+            "X-RateLimit-Remaining": str(remaining),
+        })
 
     if body.get("stream") is False:
         try:
@@ -106,13 +129,19 @@ def chat_completions(
                 stream=False,
             )
             if hasattr(response, "model_dump"):
-                return JSONResponse(response.model_dump(exclude_none=True))
-            return JSONResponse(response.dict(exclude_none=True))
+                payload = response.model_dump(exclude_none=True)
+                return JSONResponse(payload, headers=response_headers)
+            payload = response.dict(exclude_none=True)
+            return JSONResponse(payload, headers=response_headers)
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     return StreamingResponse(
         sse_stream(body),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+        headers={
+            **response_headers,
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        },
     )
