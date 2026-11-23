@@ -74,10 +74,11 @@ def consume_quota(tier: str, ip: str) -> int | None:
 def sse_stream(request_body: dict[str, Any]):
     try:
         yield f": {WATERMARK}\n\n"
+        upstream_body = dict(request_body)
+        upstream_body["model"] = request_body.get("model") or UPSTREAM_MODEL
+        upstream_body["stream"] = True
         stream = get_client().chat.completions.create(
-            **request_body,
-            model=request_body.get("model") or UPSTREAM_MODEL,
-            stream=True,
+            **upstream_body,
         )
         for chunk in stream:
             if not getattr(chunk, "choices", None):
@@ -123,10 +124,11 @@ def chat_completions(
 
     if body.get("stream") is False:
         try:
+            upstream_body = dict(body)
+            upstream_body["model"] = body.get("model") or UPSTREAM_MODEL
+            upstream_body["stream"] = False
             response = get_client().chat.completions.create(
-                **body,
-                model=body.get("model") or UPSTREAM_MODEL,
-                stream=False,
+                **upstream_body,
             )
             if hasattr(response, "model_dump"):
                 payload = response.model_dump(exclude_none=True)
