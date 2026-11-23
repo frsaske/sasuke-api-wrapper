@@ -1,10 +1,11 @@
-# Sasuke API Wrapper
+# AI Sasuke API
 
-OpenAI-compatible FastAPI proxy for `https://100milionseek.top/v1` with streaming responses.
+OpenAI-compatible FastAPI API for AI Sasuke with streaming responses.
 
 ## Endpoints
 
 - `GET /health`
+- `GET /` — JSON dashboard with total requests and token usage
 - `POST /v1/chat/completions`
 - Interactive docs: `/docs`
 
@@ -14,6 +15,8 @@ OpenAI-compatible FastAPI proxy for `https://100milionseek.top/v1` with streamin
 - `sasuke`: 100 requests per UTC day per client IP, then `429 Daily limit crossed`
 
 Every response includes the watermark `developer: sasuke` in `X-Sasuke-Watermark` and `X-Developer` headers. Streaming responses also emit it as an SSE comment before the first chunk, so normal OpenAI clients continue to work unchanged.
+
+The API automatically injects the AI Sasuke system prompt and removes caller-provided system messages. The direct dashboard URL returns JSON such as `total_requests`, `prompt_tokens`, `completion_tokens`, and `total_tokens`.
 
 The standard-tier counter is in memory and resets if the process restarts. For multi-instance production use, replace it with Redis or a database.
 
